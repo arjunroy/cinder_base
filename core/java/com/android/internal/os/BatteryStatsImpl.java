@@ -1176,7 +1176,9 @@ public final class BatteryStatsImpl extends BatteryStats {
         }
     }
     
-    public void noteWifiOnLocked(int uid) {
+    public void noteWifiOnLocked(int uid, int tid) {
+        String logstr = "noteWifiOnLocked: UID = " + uid + " TID = " + tid;
+        Log.v(TAG, logstr);
         if (!mWifiOn) {
             mWifiOn = true;
             mWifiOnTimer.startRunningLocked(this);
@@ -1190,7 +1192,9 @@ public final class BatteryStatsImpl extends BatteryStats {
         }
     }
     
-    public void noteWifiOffLocked(int uid) {
+    public void noteWifiOffLocked(int uid, int tid) {
+        String logstr = "noteWifiOffLocked: UID = " + uid + " TID = " + tid;
+        Log.v(TAG, logstr);
         if (mWifiOn) {
             mWifiOn = false;
             mWifiOnTimer.stopRunningLocked(this);

@@ -38,8 +38,8 @@ interface IBatteryStats {
     void notePhoneSignalStrength(in SignalStrength signalStrength);
     void notePhoneDataConnectionState(int dataType, boolean hasData);
     void noteAirplaneMode(boolean isAirplaneMode);
-    void noteWifiOn(int uid);
-    void noteWifiOff(int uid);
+    void noteWifiOn(int uid, int tid);
+    void noteWifiOff(int uid, int tid);
     void noteWifiRunning();
     void noteWifiStopped();
     void noteBluetoothOn();

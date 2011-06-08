@@ -42,6 +42,7 @@ import android.net.wifi.SupplicantState;
 import android.net.NetworkStateTracker;
 import android.net.DhcpInfo;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -81,6 +82,8 @@ public class WifiService extends IWifiManager.Stub {
     private static final boolean DBG = false;
     private static final Pattern scanResultPattern = Pattern.compile("\t+");
     private final WifiStateTracker mWifiStateTracker;
+
+    private static final String TID_BUNDLE_KEY = "PID";
 
     private Context mContext;
     private int mWifiState;
@@ -179,6 +182,11 @@ public class WifiService extends IWifiManager.Stub {
      * Last UID that asked to enable WIFI.
      */
     private int mLastEnableUid = Process.myUid();
+
+    /*
+     * Last TID that asked to enable WIFI.
+     */
+    private int mLastEnableTid = Process.myTid();
     
     /**
      * Number of allowed radio frequency channels in various regulatory domains.
@@ -251,7 +259,7 @@ public class WifiService extends IWifiManager.Stub {
                 },
                 new IntentFilter(Intent.ACTION_AIRPLANE_MODE_CHANGED));
 
-        setWifiEnabledBlocking(wifiEnabled, false, Process.myUid());
+        setWifiEnabledBlocking(wifiEnabled, false, Process.myUid(), Process.myTid());
     }
 
     /**
@@ -468,7 +476,8 @@ public class WifiService extends IWifiManager.Stub {
         synchronized (mWifiHandler) {
             sWakeLock.acquire();
             mLastEnableUid = Binder.getCallingUid();
-            sendEnableMessage(enable, true, Binder.getCallingUid());
+            mLastEnableTid = Binder.getCallingPid();
+            sendEnableMessage(enable, true, Binder.getCallingUid(), Binder.getCallingPid());
         }
 
         return true;
@@ -479,10 +488,11 @@ public class WifiService extends IWifiManager.Stub {
      * @param enable {@code true} to turn Wi-Fi on, {@code false} to turn it off.
      * @param persist {@code true} if the setting should be persisted.
      * @param uid The UID of the process making the request.
+     * @param tid The TID of the process making the request.
      * @return {@code true} if the operation succeeds (or if the existing state
      *         is the same as the requested state)
      */
-    private boolean setWifiEnabledBlocking(boolean enable, boolean persist, int uid) {
+    private boolean setWifiEnabledBlocking(boolean enable, boolean persist, int uid, int tid) {
         final int eventualWifiState = enable ? WIFI_STATE_ENABLED : WIFI_STATE_DISABLED;
 
         if (mWifiState == eventualWifiState) {
@@ -492,18 +502,18 @@ public class WifiService extends IWifiManager.Stub {
             return false;
         }
 
-        setWifiEnabledState(enable ? WIFI_STATE_ENABLING : WIFI_STATE_DISABLING, uid);
+        setWifiEnabledState(enable ? WIFI_STATE_ENABLING : WIFI_STATE_DISABLING, uid, tid);
 
         if (enable) {
             if (!WifiNative.loadDriver()) {
                 Log.e(TAG, "Failed to load Wi-Fi driver.");
-                setWifiEnabledState(WIFI_STATE_UNKNOWN, uid);
+                setWifiEnabledState(WIFI_STATE_UNKNOWN, uid, tid);
                 return false;
             }
             if (!WifiNative.startSupplicant()) {
                 WifiNative.unloadDriver();
                 Log.e(TAG, "Failed to start supplicant daemon.");
-                setWifiEnabledState(WIFI_STATE_UNKNOWN, uid);
+                setWifiEnabledState(WIFI_STATE_UNKNOWN, uid, tid);
                 return false;
             }
             registerForBroadcasts();
@@ -517,7 +527,7 @@ public class WifiService extends IWifiManager.Stub {
             boolean failedToStopSupplicantOrUnloadDriver = false;
             if (!WifiNative.stopSupplicant()) {
                 Log.e(TAG, "Failed to stop supplicant daemon.");
-                setWifiEnabledState(WIFI_STATE_UNKNOWN, uid);
+                setWifiEnabledState(WIFI_STATE_UNKNOWN, uid, tid);
                 failedToStopSupplicantOrUnloadDriver = true;
             }
 
@@ -527,7 +537,7 @@ public class WifiService extends IWifiManager.Stub {
             if (!WifiNative.unloadDriver()) {
                 Log.e(TAG, "Failed to unload Wi-Fi driver.");
                 if (!failedToStopSupplicantOrUnloadDriver) {
-                    setWifiEnabledState(WIFI_STATE_UNKNOWN, uid);
+                    setWifiEnabledState(WIFI_STATE_UNKNOWN, uid, tid);
                     failedToStopSupplicantOrUnloadDriver = true;
                 }
             }
@@ -541,7 +551,7 @@ public class WifiService extends IWifiManager.Stub {
         if (persist) {
             persistWifiEnabled(enable);
         }
-        setWifiEnabledState(eventualWifiState, uid);
+        setWifiEnabledState(eventualWifiState, uid, tid);
 
         /*
          * Initialize the hidden networks state and the number of allowed
@@ -555,15 +565,15 @@ public class WifiService extends IWifiManager.Stub {
         return true;
     }
 
-    private void setWifiEnabledState(int wifiState, int uid) {
+    private void setWifiEnabledState(int wifiState, int uid, int tid) {
         final int previousWifiState = mWifiState;
 
         long ident = Binder.clearCallingIdentity();
         try {
             if (wifiState == WIFI_STATE_ENABLED) {
-                mBatteryStats.noteWifiOn(uid);
+                mBatteryStats.noteWifiOn(uid, tid);
             } else if (wifiState == WIFI_STATE_DISABLED) {
-                mBatteryStats.noteWifiOff(uid);
+                mBatteryStats.noteWifiOff(uid, tid);
             }
         } catch (RemoteException e) {
         } finally {
@@ -1675,10 +1685,13 @@ public class WifiService extends IWifiManager.Stub {
         }
     };
 
-    private void sendEnableMessage(boolean enable, boolean persist, int uid) {
+    private void sendEnableMessage(boolean enable, boolean persist, int uid, int tid) {
         Message msg = Message.obtain(mWifiHandler,
                                      (enable ? MESSAGE_ENABLE_WIFI : MESSAGE_DISABLE_WIFI),
                                      (persist ? 1 : 0), uid);
+        Bundle bundle = new Bundle();
+        bundle.putInt(TID_BUNDLE_KEY, tid);
+        msg.setData(bundle);
         msg.sendToTarget();
     }
 
@@ -1706,7 +1719,7 @@ public class WifiService extends IWifiManager.Stub {
             if (wifiShouldBeEnabled) {
                 if (wifiShouldBeStarted) {
                     sWakeLock.acquire();
-                    sendEnableMessage(true, false, mLastEnableUid);
+                    sendEnableMessage(true, false, mLastEnableUid, mLastEnableTid);
                     sWakeLock.acquire();
                     sendStartMessage(strongestLockMode == WifiManager.WIFI_MODE_SCAN_ONLY);
                 } else {
@@ -1730,7 +1743,7 @@ public class WifiService extends IWifiManager.Stub {
                 }
             } else {
                 sWakeLock.acquire();
-                sendEnableMessage(false, false, mLastEnableUid);
+                sendEnableMessage(false, false, mLastEnableUid, mLastEnableTid);
             }
         }
     }
@@ -1772,10 +1785,14 @@ public class WifiService extends IWifiManager.Stub {
 
         @Override
         public void handleMessage(Message msg) {
+            int tid;
+            Bundle bundle;
             switch (msg.what) {
 
                 case MESSAGE_ENABLE_WIFI:
-                    setWifiEnabledBlocking(true, msg.arg1 == 1, msg.arg2);
+                    bundle = msg.getData();
+                    tid = bundle.getInt(TID_BUNDLE_KEY);
+                    setWifiEnabledBlocking(true, msg.arg1 == 1, msg.arg2, tid);
                     sWakeLock.release();
                     break;
 
@@ -1788,7 +1805,9 @@ public class WifiService extends IWifiManager.Stub {
                 case MESSAGE_DISABLE_WIFI:
                     // a non-zero msg.arg1 value means the "enabled" setting
                     // should be persisted
-                    setWifiEnabledBlocking(false, msg.arg1 == 1, msg.arg2);
+                    bundle = msg.getData();
+                    tid = bundle.getInt(TID_BUNDLE_KEY);
+                    setWifiEnabledBlocking(false, msg.arg1 == 1, msg.arg2, tid);
                     sWakeLock.release();
                     break;
 

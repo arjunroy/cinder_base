@@ -200,17 +200,21 @@ public final class BatteryStatsService extends IBatteryStats.Stub {
         }
     }
 
-    public void noteWifiOn(int uid) {
+    public void noteWifiOn(int uid, int tid) {
         enforceCallingPermission();
+        String logstr = "noteWifiOn: UID = " + uid + " TID = " + tid;
+        Log.v("BatteryStats", logstr);
         synchronized (mStats) {
-            mStats.noteWifiOnLocked(uid);
+            mStats.noteWifiOnLocked(uid, tid);
         }
     }
     
-    public void noteWifiOff(int uid) {
+    public void noteWifiOff(int uid, int tid) {
         enforceCallingPermission();
+        String logstr = "noteWifiOff: UID = " + uid + " TID = " + tid;
+        Log.v("BatteryStats", logstr);
         synchronized (mStats) {
-            mStats.noteWifiOffLocked(uid);
+            mStats.noteWifiOffLocked(uid, tid);
         }
     }
 
